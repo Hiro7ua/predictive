@@ -1,4 +1,4 @@
-name: Build Geode Mod (Android)
+name: Build Geode Mod (Multiplatform)
 
 on:
   workflow_dispatch:
@@ -12,6 +12,9 @@ jobs:
       fail-fast: false
       matrix:
         config:
+          - name: Windows
+            os: windows-latest
+            target: Win64
           - name: Android32
             os: ubuntu-latest
             target: Android32
@@ -47,5 +50,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PredictiveBuffer-Android
+          name: PredictiveBuffer-Multiplatform
           path: ${{ steps.build.outputs.build-output }}
