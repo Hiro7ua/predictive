@@ -1,4 +1,4 @@
-name: Build Geode Mod (Multiplatform)
+name: Build Geode Mod (Windows Only)
 
 on:
   workflow_dispatch:
@@ -8,23 +8,9 @@ on:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - name: Windows
-            os: windows-latest
-            target: Win64
-          - name: Android32
-            os: ubuntu-latest
-            target: Android32
-          - name: Android64
-            os: ubuntu-latest
-            target: Android64
-
-    name: ${{ matrix.config.name }}
-    runs-on: ${{ matrix.config.os }}
-
+    name: Windows
+    runs-on: windows-latest
+    
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,7 +21,7 @@ jobs:
         with:
           sdk: 'latest'
           combine: true
-          target: ${{ matrix.config.target }}
+          target: Win64
 
   package:
     name: Package .geode
@@ -50,5 +36,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PredictiveBuffer-Multiplatform
+          name: PredictiveBuffer-Windows
           path: ${{ steps.build.outputs.build-output }}
