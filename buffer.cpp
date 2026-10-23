@@ -26,9 +26,6 @@ extern "C" __declspec(dllimport) short __stdcall GetAsyncKeyState(int vKey);
 
 using namespace geode::prelude;
 
-// ---------------------------------------------------------------------------
-//  Ajustes / etapas
-// ---------------------------------------------------------------------------
 namespace ib {
 
     State& S() {
@@ -65,10 +62,8 @@ namespace ib {
 
     bool cfgShowButton() { return Mod::get()->getSavedValue<bool>("show-button", true); }
     void cfgSetShowButton(bool v) { Mod::get()->setSavedValue<bool>("show-button", v); }
-
     int cfgOpacity() { return std::clamp(Mod::get()->getSavedValue<int>("button-opacity", 55), 10, 100); }
     void cfgSetOpacity(int v) { Mod::get()->setSavedValue<int>("button-opacity", std::clamp(v, 10, 100)); }
-
     bool cfgLogSaves() { return Mod::get()->getSavedValue<bool>("log-saves", false); }
     void cfgSetLogSaves(bool v) { Mod::get()->setSavedValue<bool>("log-saves", v); }
 
@@ -86,22 +81,15 @@ namespace ib {
         st.sinceInput = 999;
         st.rapidCount = 0;
     }
-
 }
 
 $on_mod(Loaded) {
     ib::loadSettings();
 }
 
-// ---------------------------------------------------------------------------
-//  Utilidades (toleran diferencias entre versiones de los bindings)
-// ---------------------------------------------------------------------------
 namespace ibx {
 namespace {
-
-    // Tipos de objeto que se conservan durante la simulacion:
-    // 0 = solido, 2 = peligro, 25 = pendiente, 39 y 47 (igual que el original)
-    constexpr std::uint64_t kCollMask = 0x808002000005ull;
+    constexpr std::uint64_t kCollMask = 0x808002000005ull; // Incluye Hazard (2)
 
 #define IB_FLAG(fn, member)                                  \
     template <class T>                                       \
@@ -114,8 +102,8 @@ namespace {
     }
 
     IB_FLAG(flagShip, m_isShip)
-    IB_FLAG(flagBird, m_isBird)      // UFO
-    IB_FLAG(flagDart, m_isDart)      // wave
+    IB_FLAG(flagBird, m_isBird)
+    IB_FLAG(flagDart, m_isDart)
     IB_FLAG(flagRobot, m_isRobot)
     IB_FLAG(flagSwing, m_isSwing)
     IB_FLAG(flagDead, m_isDead)
@@ -158,7 +146,6 @@ namespace {
         }
     }
 
-    // Copia el estado fisico del jugador real al fantasma.
     template <class T>
     void copyState(T* g, T* p) {
         if constexpr (requires { g->copyAttributes(p); }) {
@@ -199,7 +186,6 @@ namespace {
         }
     }
 
-    // Vacia los registros de colision del fantasma entre ticks.
     template <class T>
     void clearLogs(T* p) {
         if constexpr (requires { p->m_collisionLogTop; }) {
@@ -237,14 +223,14 @@ namespace {
 
     template <class P, class L, class H>
     P* makePlayer(L* layer, H* parent) {
-        if constexpr (requires { P::create(1, 1, layer, parent, true); }) {
-            return P::create(1, 1, layer, parent, true);
+        // EL CAMBIO CLAVE: isMainPlayer debe ser false para que el motor procese sus colisiones de forma independiente
+        if constexpr (requires { P::create(1, 1, layer, parent, false); }) {
+            return P::create(1, 1, layer, parent, false);
         } else {
             return nullptr;
         }
     }
 
-    // Envia un input "real" al juego saltandose el buffer.
     void inject(GJBaseGameLayer* pl, bool down) {
         auto& st = ib::S();
         st.injecting = true;
@@ -253,9 +239,6 @@ namespace {
         st.injecting = false;
     }
 
-    // Simula `horizon` ticks despues de aplicar el input (`down`) en el tick `delay`.
-    // Devuelve cuantos ticks sobrevive (horizon = sobrevive todo).
-    // abortFlag = true si muere ANTES de que el input se aplique (no tiene sentido retrasar).
     int simulate(GJBaseGameLayer* pl, PlayerObject* p1, PlayerObject* p2, bool dual,
                  int delay, bool down, int horizon, bool& abortFlag) {
         auto& st = ib::S();
@@ -271,23 +254,17 @@ namespace {
         copyState(g1, p1);
         if (g2) copyState(g2, p2);
 
-        // estado previo al input que se evalua (soltado si es un press, pulsado si es un release)
         applyButton(g1, !down);
         if (g2) applyButton(g2, !down);
 
         float dt = st.stepDt;
         if (!(dt > 0.001f && dt < 2.0f)) dt = 0.25f;
 
-        // modos "hold" (wave / ufo / swing): no se usa el atajo de aterrizaje seguro
         bool holdMode = true;
         if (!flagDart(p1) && !flagBird(p1) && !flagSwing(p1)) {
-            if (!dual || !p2) {
-                holdMode = false;
-            } else if (flagDart(p2) || flagBird(p2)) {
-                holdMode = true;
-            } else {
-                holdMode = flagSwing(p2);
-            }
+            if (!dual || !p2) holdMode = false;
+            else if (flagDart(p2) || flagBird(p2)) holdMode = true;
+            else holdMode = flagSwing(p2);
         }
 
         const int total = horizon + delay;
@@ -305,10 +282,14 @@ namespace {
 
             g1->update(dt);
             if (g2) g2->update(dt);
+            
             if (st.simDied) { died = true; deathTick = i; break; }
 
             clearLogs(g1);
-            if (!runCollisions(pl, g1, dt)) { st.simBroken = true; break; }
+            if (!runCollisions(pl, g1, dt)) { 
+                st.simBroken = true; 
+                break; 
+            }
             if (st.simDied) { died = true; deathTick = i; break; }
 
             if (g2) {
@@ -326,7 +307,7 @@ namespace {
                 ++airTicks;
                 groundStreak = 0;
             } else if (airTicks >= 6) {
-                if (groundStreak > 2) { after = horizon; break; }   // salto completado a salvo
+                if (groundStreak > 2) { after = horizon; break; }
                 ++groundStreak;
             }
         }
@@ -335,20 +316,15 @@ namespace {
         st.simulating = false;
 
         if (st.simBroken) {
-            log::warn("[InputBuffer] GJBaseGameLayer::checkCollisions no disponible: simulacion desactivada");
+            log::warn("[InputBuffer] checkCollisions no disponible: simulacion desactivada");
             return horizon;
         }
         return after;
     }
-
 }
 }
 
-// ---------------------------------------------------------------------------
-//  Ciclo de vida de los fantasmas
-// ---------------------------------------------------------------------------
 namespace ib {
-
     void destroyGhosts() {
         auto& st = S();
         PlayerObject** slots[2] = {&st.ghost1, &st.ghost2};
@@ -372,7 +348,6 @@ namespace ib {
         auto& st = S();
         if (!pl || !pl->m_objectLayer) return;
 
-        // Contenedor invisible: asi estelas/particulas del fantasma tampoco se ven.
         auto* holder = CCLayer::create();
         if (!holder) return;
         holder->setVisible(false);
@@ -395,12 +370,8 @@ namespace ib {
             log::warn("[InputBuffer] no se pudo crear el jugador fantasma: el buffer queda inactivo");
         }
     }
-
 }
 
-// ---------------------------------------------------------------------------
-//  Hooks: entrada (handleButton) y colisiones
-// ---------------------------------------------------------------------------
 class $modify(IBGameLayer, GJBaseGameLayer) {
     void handleButton(bool down, int button, bool isPlayer1) {
         auto& st = ib::S();
@@ -415,7 +386,6 @@ class $modify(IBGameLayer, GJBaseGameLayer) {
         }
 
         const bool dual = ibx::dualOn(pl) && pl->m_player2 != nullptr;
-
         if (!isPlayer1 && ibx::platformerLevel(pl)) {
             return GJBaseGameLayer::handleButton(down, button, isPlayer1);
         }
@@ -431,7 +401,6 @@ class $modify(IBGameLayer, GJBaseGameLayer) {
         PlayerObject* p1 = this->m_player1;
         PlayerObject* p2 = dual ? pl->m_player2 : nullptr;
 
-        // jugador muerto o en ship: input crudo
         if (!p1 || ibx::flagDead(p1) || ibx::flagShip(p1) || (p2 && ibx::flagShip(p2))) {
             st.pending = -1;
             st.flagD = false;
@@ -439,7 +408,6 @@ class $modify(IBGameLayer, GJBaseGameLayer) {
             return GJBaseGameLayer::handleButton(down, button, isPlayer1);
         }
 
-        // ya hay un input retrasado en camino: este evento solo se anota
         if (st.pending >= 0) {
             st.flagD = (st.pendingDown != down);
             st.sinceInput = 0;
@@ -465,7 +433,6 @@ class $modify(IBGameLayer, GJBaseGameLayer) {
             mini = p2Wave && 1.0f > ibx::vehicleSize(p2);
         }
 
-        // spam de clics en wave: se deja pasar el input crudo
         if (st.sinceInput < 8) {
             const int c = st.rapidCount++;
             st.sinceInput = 0;
@@ -478,7 +445,6 @@ class $modify(IBGameLayer, GJBaseGameLayer) {
             st.rapidCount = 0;
         }
 
-        // que eventos se bufferizan: todo en wave; solo "press" en el resto (y release en robot)
         if (!p1Wave) {
             const bool p2WaveOnly = p2 && !p1Robot && p2Wave;
             if (!p2WaveOnly) {
@@ -498,7 +464,6 @@ class $modify(IBGameLayer, GJBaseGameLayer) {
         bool ab = false;
         const int f0 = ibx::simulate(pl, p1, p2, dual, 0, down, horizon, ab);
 
-        // el input inmediato ya sobrevive todo el horizonte: no hace falta retrasar
         if (f0 >= horizon || maxDelay <= 0) {
             st.prevDown = down;
             return GJBaseGameLayer::handleButton(down, button, isPlayer1);
@@ -537,14 +502,13 @@ class $modify(IBGameLayer, GJBaseGameLayer) {
             ib::onSaved(found);
             st.pendingDown = down;
             st.pending = found;
-            return;   // el input se inyectara dentro de `found` ticks
+            return;
         }
 
         st.prevDown = down;
         return GJBaseGameLayer::handleButton(down, button, isPlayer1);
     }
 
-    // Durante la simulacion el fantasma solo choca con solidos / peligros / pendientes.
     void collisionCheckObjects(PlayerObject* player, gd::vector<GameObject*>* objects, int count, float dt) {
         if (!ib::S().simulating || !objects) {
             return GJBaseGameLayer::collisionCheckObjects(player, objects, count, dt);
@@ -567,9 +531,6 @@ class $modify(IBGameLayer, GJBaseGameLayer) {
     }
 };
 
-// ---------------------------------------------------------------------------
-//  Hooks: jugador
-// ---------------------------------------------------------------------------
 class $modify(IBPlayer, PlayerObject) {
     void update(float dt) {
         auto& st = ib::S();
@@ -578,21 +539,15 @@ class $modify(IBPlayer, PlayerObject) {
         if (!st.simulating) {
             auto* pl = PlayLayer::get();
             if (pl && self == pl->m_player1) {
-
 #ifdef GEODE_IS_WINDOWS
-                // F6 = cambiar de etapa (en Android se usa el boton tactil)
                 if (GetAsyncKeyState(0x75) & 1) {
                     ib::cycleStage();
                 }
 #endif
-
                 if (st.enabled) {
                     if (st.sinceInput <= 998) ++st.sinceInput;
-
                     const bool dual = ibx::dualOn(pl) && pl->m_player2 != nullptr;
-
                     if (ibx::flagShip(self) || (dual && ibx::flagShip(pl->m_player2))) {
-                        // ship: input crudo
                         st.pending = -1;
                         st.flagD = false;
                         const bool d = st.lastDown;
@@ -632,7 +587,6 @@ class $modify(IBPlayer, PlayerObject) {
         }
     }
 
-    // --- efectos secundarios que se anulan mientras se simula ---
     void incrementJumps() {
         if (ib::S().simulating) return;
         PlayerObject::incrementJumps();
@@ -665,9 +619,6 @@ class $modify(IBEffectObject, EffectGameObject) {
     }
 };
 
-// ---------------------------------------------------------------------------
-//  Hooks: PlayLayer
-// ---------------------------------------------------------------------------
 class $modify(IBPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
         if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
@@ -690,7 +641,7 @@ class $modify(IBPlayLayer, PlayLayer) {
     void destroyPlayer(PlayerObject* player, GameObject* object) {
         auto& st = ib::S();
         if (st.simulating && (player == st.ghost1 || player == st.ghost2)) {
-            st.simDied = true;   // murio el fantasma: no se mata al jugador real
+            st.simDied = true;
             return;
         }
         st.pending = -1;
@@ -701,7 +652,7 @@ class $modify(IBPlayLayer, PlayLayer) {
     }
 
     void playEndAnimationToPos(cocos2d::CCPoint pos) {
-        if (ib::S().simulating) return;   // el fantasma no debe terminar el nivel
+        if (ib::S().simulating) return;
         PlayLayer::playEndAnimationToPos(pos);
     }
 };
